@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: history-interview-simulator
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 10000
+      - key: RATE_LIMIT_PER_MINUTE
+        value: 20
+      - key: DAILY_CAP_PER_IP
+        value: 200
+      - key: DAILY_GLOBAL_CAP
+        value: 5000
+      - key: JSON_BODY_LIMIT_BYTES
+        value: 524288
+      - key: GROQ_API_KEY
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
