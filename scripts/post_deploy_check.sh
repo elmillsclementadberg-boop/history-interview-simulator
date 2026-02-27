@@ -9,6 +9,30 @@ fi
 
 BASE_URL="${1%/}"
 
+has_rg() {
+  command -v rg >/dev/null 2>&1
+}
+
+text_matches() {
+  local pattern="$1"
+  local text="$2"
+  if has_rg; then
+    printf "%s" "$text" | rg "$pattern" >/dev/null
+  else
+    printf "%s" "$text" | grep -E "$pattern" >/dev/null
+  fi
+}
+
+file_matches() {
+  local pattern="$1"
+  local file="$2"
+  if has_rg; then
+    rg "$pattern" "$file" >/dev/null
+  else
+    grep -E "$pattern" "$file" >/dev/null
+  fi
+}
+
 check_http_ok() {
   local name="$1"
   local url="$2"
@@ -28,12 +52,12 @@ check_api_health() {
   local url="$BASE_URL/api/health"
   local body
   body=$(curl -s "$url")
-  echo "$body" | rg '"ok"\s*:\s*true' >/dev/null || {
+  text_matches '"ok"[[:space:]]*:[[:space:]]*true' "$body" || {
     echo "[FAIL] health未返回 ok=true"
     echo "$body"
     exit 1
   }
-  echo "$body" | rg '"backend"\s*:\s*"(memory|redis)"' >/dev/null || {
+  text_matches '"backend"[[:space:]]*:[[:space:]]*"(memory|redis)"' "$body" || {
     echo "[FAIL] health未返回限流后端"
     echo "$body"
     exit 1
@@ -58,7 +82,7 @@ check_chat_api() {
     exit 1
   fi
 
-  rg '"choices"' /tmp/chat_body.txt >/dev/null || {
+  file_matches '"choices"' /tmp/chat_body.txt || {
     echo "[FAIL] /api/chat 响应中没有 choices"
     head -c 500 /tmp/chat_body.txt || true
     echo
