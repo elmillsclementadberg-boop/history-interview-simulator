@@ -7,13 +7,21 @@ const saveConfigBtn = document.getElementById("saveConfigBtn");
 const sendBtn = document.getElementById("sendBtn");
 const interviewPanel = document.getElementById("interviewPanel");
 const chatBox = document.getElementById("chatBox");
-const sceneStage = document.getElementById("sceneStage");
-const seatLayer = document.getElementById("seatLayer");
-const speakerBubble = document.getElementById("speakerBubble");
+const committeeGrid = document.getElementById("committeeGrid");
+const currentQuestion = document.getElementById("currentQuestion");
+const speechBubble = currentQuestion ? currentQuestion.closest(".speech-bubble") : null;
+const committeeSection = document.querySelector(".committee-section");
+const candidateZone = document.querySelector(".candidate-zone");
+const roundTable = document.querySelector(".round-table");
+const countdownClock = document.getElementById("countdownClock");
+const historyAccordion = document.getElementById("historyAccordion");
 const answerForm = document.getElementById("answerForm");
 const answerInput = document.getElementById("answerInput");
 const statusLine = document.getElementById("statusLine");
 const voiceHint = document.getElementById("voiceHint");
+const examNoticeModal = document.getElementById("examNoticeModal");
+const noticeCancelBtn = document.getElementById("noticeCancelBtn");
+const noticeAgreeBtn = document.getElementById("noticeAgreeBtn");
 
 const trackSelect = document.getElementById("trackSelect");
 const baseUrlInput = document.getElementById("baseUrlInput");
@@ -40,29 +48,25 @@ const committeeMembers = [
   { id: "t9", name: "徐老师(女·资深)", skin: "#f3d2b8", hair: "#45413f", jacket: "#5a6f4f" },
 ];
 
-const studentMember = {
-  id: "student",
-  name: "考生（你）",
-  skin: "#f1c9ab",
-  hair: "#242424",
-  jacket: "#0f766e",
-  cls: "student",
-};
-
-const committeeSeatLayout = [
-  { id: "t1", x: 27, y: 33 },
-  { id: "t2", x: 38, y: 25 },
-  { id: "t3", x: 50, y: 22 },
-  { id: "t4", x: 62, y: 25 },
-  { id: "t5", x: 73, y: 33 },
-  { id: "t6", x: 77, y: 46 },
-  { id: "t7", x: 66, y: 58 },
-  { id: "t8", x: 34, y: 58 },
-  { id: "t9", x: 23, y: 46 },
-  { id: "chief", x: 50, y: 66 },
+const committeeDisplayRoles = [
+  { id: "t1", title: "考官" },
+  { id: "t2", title: "考官" },
+  { id: "t3", title: "考官" },
+  { id: "chief", title: "主考官" },
+  { id: "t4", title: "考官" },
+  { id: "t5", title: "考官" },
+  { id: "t6", title: "考官" },
+  { id: "t7", title: "考官" },
+  { id: "t8", title: "考官" },
 ];
 
+const examinerRotationIds = ["chief", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"];
+
 const fallbackFollowUps = {
+  历史学: [
+    "老师：请你说明史料、史观与史法三者在历史研究中的关系。",
+    "老师：请结合一个案例，谈谈如何在历史解释中平衡结构因素与个人作用。",
+  ],
   中国史: [
     "老师：你提到了经济变化，请补充一个制度层面的例证。",
     "老师：如果从社会结构角度分析，这一变革带来了哪些长期影响？",
@@ -101,7 +105,7 @@ const speechGlossary = {
 
 const interviewState = {
   started: false,
-  track: "中国史",
+  track: "历史学",
   round: 0,
   history: [],
   transcript: [],
@@ -111,8 +115,7 @@ const interviewState = {
   phase: "intro",
   specialization: "",
   examinerCursor: 0,
-  sceneReady: false,
-  speakingId: "",
+  activeRoleId: "chief",
 };
 
 const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -123,10 +126,75 @@ let recordedChunks = [];
 let liveDraftRecognition = null;
 let liveDraftBaseText = "";
 let liveDraftText = "";
+let noticeModalCloseTimer = null;
+let countdownSeconds = 15 * 60;
+let countdownTicker = null;
 
 function setStatus(text, warn = false) {
   statusLine.textContent = `状态：${text}`;
   statusLine.classList.toggle("warn", warn);
+}
+
+function openExamNoticeModal() {
+  if (!examNoticeModal) {
+    startInterview();
+    return;
+  }
+
+  window.clearTimeout(noticeModalCloseTimer);
+  examNoticeModal.classList.remove("hidden");
+  examNoticeModal.setAttribute("aria-hidden", "false");
+  requestAnimationFrame(() => {
+    examNoticeModal.classList.add("is-open");
+    if (noticeAgreeBtn) {
+      noticeAgreeBtn.focus();
+    }
+  });
+  document.body.classList.add("modal-open");
+}
+
+function closeExamNoticeModal(options = {}) {
+  if (!examNoticeModal) return;
+
+  const { restoreFocus = true } = options;
+  window.clearTimeout(noticeModalCloseTimer);
+  examNoticeModal.classList.remove("is-open");
+  examNoticeModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
+
+  noticeModalCloseTimer = window.setTimeout(() => {
+    examNoticeModal.classList.add("hidden");
+    if (restoreFocus && startBtn && !interviewState.started) {
+      startBtn.focus();
+    }
+  }, 280);
+}
+
+function onStartButtonClick() {
+  if (interviewState.started) return;
+  openExamNoticeModal();
+}
+
+function onNoticeCancel() {
+  closeExamNoticeModal();
+}
+
+function onNoticeAgree() {
+  if (interviewState.started) return;
+  closeExamNoticeModal({ restoreFocus: false });
+  startInterview();
+}
+
+function onNoticeOverlayClick(event) {
+  if (!examNoticeModal) return;
+  if (event.target !== examNoticeModal) return;
+  closeExamNoticeModal();
+}
+
+function onDocumentEscape(event) {
+  if (event.key !== "Escape") return;
+  if (!examNoticeModal || examNoticeModal.classList.contains("hidden")) return;
+  closeExamNoticeModal();
 }
 
 function appendMessage(role, text) {
@@ -137,87 +205,303 @@ function appendMessage(role, text) {
   chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-function buildSeatNode(member, position) {
-  const seat = document.createElement("div");
-  seat.className = `avatar-seat ${member.cls || ""}`.trim();
-  seat.dataset.memberId = member.id;
-  seat.style.left = `${position.x}%`;
-  seat.style.top = `${position.y}%`;
+function buildCommitteeCard(role, index) {
+  const member = committeeMembers.find((item) => item.id === role.id);
+  const node = document.createElement("div");
+  node.className = `committee-card slot-${index + 1}`;
+  node.dataset.roleId = role.id;
 
   const head = document.createElement("div");
   head.className = "avatar-head";
-  head.style.background = `linear-gradient(180deg, ${member.hair} 0 38%, ${member.skin} 38% 100%)`;
+  head.style.background = `linear-gradient(180deg, ${
+    member?.hair || "#3a2f2a"
+  } 0 38%, ${member?.skin || "#edc3a1"} 38% 100%)`;
 
   const body = document.createElement("div");
   body.className = "avatar-body";
-  body.style.background = member.jacket;
+  body.style.background = member?.jacket || "#6a5d52";
 
-  const name = document.createElement("div");
-  name.className = "seat-name";
-  name.textContent = member.name;
+  const roleLabel = document.createElement("span");
+  roleLabel.className = "role-label";
+  roleLabel.textContent = member?.name || role.title;
 
-  seat.appendChild(head);
-  seat.appendChild(body);
-  seat.appendChild(name);
-  return seat;
+  node.appendChild(head);
+  node.appendChild(body);
+  node.appendChild(roleLabel);
+  return node;
 }
 
-function renderSceneSeats() {
-  if (!seatLayer || interviewState.sceneReady) return;
-  seatLayer.innerHTML = "";
-
-  committeeSeatLayout.forEach((seatPos) => {
-    const member = committeeMembers.find((item) => item.id === seatPos.id);
-    if (!member) return;
-    seatLayer.appendChild(buildSeatNode(member, seatPos));
+function renderCommitteeGrid() {
+  if (!committeeGrid) return;
+  committeeGrid.innerHTML = "";
+  committeeDisplayRoles.forEach((role, index) => {
+    committeeGrid.appendChild(buildCommitteeCard(role, index));
   });
-
-  seatLayer.appendChild(buildSeatNode(studentMember, { x: 50, y: 87 }));
-  interviewState.sceneReady = true;
+  setActiveRole(interviewState.activeRoleId);
+  requestAnimationFrame(() => {
+    positionSpeechBubble(interviewState.activeRoleId);
+  });
 }
 
 function clearSpeaking() {
-  if (!seatLayer) return;
-  seatLayer.querySelectorAll(".avatar-seat.speaking").forEach((node) => node.classList.remove("speaking"));
+  if (!committeeGrid) return;
+  committeeGrid.querySelectorAll(".committee-card").forEach((node) => {
+    node.classList.remove("is-active");
+    node.classList.remove("is-muted");
+  });
 }
 
-function showSceneSpeech(memberId, rawText) {
-  if (!seatLayer || !speakerBubble || !sceneStage) return;
-  const text = String(rawText || "").replace(/^老师：?/, "").trim();
-  const seat = seatLayer.querySelector(`.avatar-seat[data-member-id="${memberId}"]`);
-  if (!seat || !text) {
-    speakerBubble.classList.add("hidden");
+function setActiveRole(roleId) {
+  if (!committeeGrid) return;
+  const cards = Array.from(committeeGrid.querySelectorAll(".committee-card"));
+  if (!cards.length) return;
+
+  let found = false;
+  cards.forEach((card) => {
+    const isActive = card.dataset.roleId === roleId;
+    if (isActive) {
+      found = true;
+      card.classList.add("is-active");
+      card.classList.remove("is-muted");
+    } else {
+      card.classList.remove("is-active");
+      card.classList.add("is-muted");
+    }
+  });
+
+  if (!found) {
+    clearSpeaking();
+  }
+  interviewState.activeRoleId = found ? roleId : "";
+}
+
+function setCurrentQuestion(text) {
+  if (!currentQuestion) return;
+  currentQuestion.textContent = String(text || "").trim() || "请等待考官提问。";
+  requestAnimationFrame(() => {
+    positionSpeechBubble(interviewState.activeRoleId);
+  });
+}
+
+function rectIntersects(a, b, padding = 0) {
+  return !(
+    a.right + padding <= b.left ||
+    a.left - padding >= b.right ||
+    a.bottom + padding <= b.top ||
+    a.top - padding >= b.bottom
+  );
+}
+
+function overlapArea(a, b, padding = 0) {
+  const left = Math.max(a.left - padding, b.left);
+  const right = Math.min(a.right + padding, b.right);
+  const top = Math.max(a.top - padding, b.top);
+  const bottom = Math.min(a.bottom + padding, b.bottom);
+  if (right <= left || bottom <= top) return 0;
+  return (right - left) * (bottom - top);
+}
+
+function positionSpeechBubble(activeRoleId = interviewState.activeRoleId) {
+  if (!speechBubble || !committeeSection || !committeeGrid) return;
+  if (getComputedStyle(speechBubble).position !== "absolute") {
+    speechBubble.style.left = "";
+    speechBubble.style.top = "";
     return;
   }
 
-  clearSpeaking();
-  seat.classList.add("speaking");
-  interviewState.speakingId = memberId;
+  const sectionRect = committeeSection.getBoundingClientRect();
+  const cards = Array.from(committeeGrid.querySelectorAll(".committee-card"));
+  if (!cards.length) return;
 
-  speakerBubble.textContent = text;
-  speakerBubble.classList.remove("hidden");
+  const bubbleWidth = speechBubble.offsetWidth;
+  const bubbleHeight = speechBubble.offsetHeight;
+  if (!bubbleWidth || !bubbleHeight) return;
 
-  const rootRect = sceneStage.getBoundingClientRect();
-  const seatRect = seat.getBoundingClientRect();
-  const bubbleWidth = memberId === "student" ? 240 : 300;
-  let left = seatRect.left - rootRect.left - bubbleWidth / 2 + seatRect.width / 2;
-  let top = seatRect.top - rootRect.top - 78;
-  if (memberId === "student") {
-    top = seatRect.top - rootRect.top - 92;
+  const minCenter = bubbleWidth / 2 + 16;
+  const maxCenter = sectionRect.width - bubbleWidth / 2 - 16;
+  const defaultCenterX = sectionRect.width / 2;
+  let activeCenterX = defaultCenterX;
+  let activeCenterY = 120;
+
+  const activeCard = activeRoleId
+    ? committeeGrid.querySelector(`.committee-card[data-role-id="${activeRoleId}"]`)
+    : null;
+  if (activeCard) {
+    const activeRect = activeCard.getBoundingClientRect();
+    activeCenterX = activeRect.left - sectionRect.left + activeRect.width / 2;
+    activeCenterY = activeRect.top - sectionRect.top + activeRect.height / 2;
   }
-  left = Math.max(10, Math.min(left, rootRect.width - bubbleWidth - 10));
-  top = Math.max(20, top);
+  activeCenterX = Math.max(minCenter, Math.min(maxCenter, activeCenterX));
 
-  speakerBubble.style.width = `${bubbleWidth}px`;
-  speakerBubble.style.left = `${left}px`;
-  speakerBubble.style.top = `${top}px`;
+  const tableRect = roundTable ? roundTable.getBoundingClientRect() : null;
+  const tableBottom = tableRect ? tableRect.bottom - sectionRect.top : 320;
+  const preferredTop = tableBottom + 10;
+  let minTop = Math.max(176, preferredTop);
+  let maxTop = sectionRect.height - bubbleHeight - 14;
+  const candidateRect = candidateZone ? candidateZone.getBoundingClientRect() : null;
+  if (candidateRect) {
+    const candidateTop = candidateRect.top - sectionRect.top;
+    maxTop = Math.min(maxTop, candidateTop - bubbleHeight - 20);
+  }
+  if (maxTop < minTop) {
+    minTop = Math.max(140, maxTop - 16);
+  }
+
+  // Keep bubble horizontally aligned with the speaking examiner first.
+  const primaryX = Math.max(minCenter, Math.min(maxCenter, activeCenterX));
+  const xCandidatesRaw = [
+    primaryX,
+    primaryX - 24,
+    primaryX + 24,
+    primaryX - 48,
+    primaryX + 48,
+    defaultCenterX,
+  ];
+  const xCandidates = Array.from(
+    new Set(xCandidatesRaw.map((x) => Math.round(Math.max(minCenter, Math.min(maxCenter, x)))))
+  );
+
+  const yCandidates = [];
+  // Prefer placing bubble lower first (closer to candidate side) to avoid upper examiner labels.
+  for (let y = maxTop; y >= minTop; y -= 8) {
+    yCandidates.push(y);
+  }
+  if (!yCandidates.length) {
+    yCandidates.push(Math.max(140, Math.min(sectionRect.height - bubbleHeight - 8, preferredTop)));
+  }
+
+  const cardRects = cards.map((card) => {
+    const rect = card.getBoundingClientRect();
+    return {
+      left: rect.left - sectionRect.left,
+      right: rect.right - sectionRect.left,
+      top: rect.top - sectionRect.top,
+      bottom: rect.bottom - sectionRect.top,
+    };
+  });
+  if (candidateRect) {
+    cardRects.push({
+      left: candidateRect.left - sectionRect.left,
+      right: candidateRect.right - sectionRect.left,
+      top: candidateRect.top - sectionRect.top,
+      bottom: candidateRect.bottom - sectionRect.top,
+      isCandidate: true,
+    });
+  }
+
+  const getBubbleRect = (centerX, top) => ({
+    left: centerX - bubbleWidth / 2,
+    right: centerX + bubbleWidth / 2,
+    top,
+    bottom: top + bubbleHeight,
+  });
+
+  let best = null;
+  for (const y of yCandidates) {
+    for (const x of xCandidates) {
+      const bubbleRect = getBubbleRect(x, y);
+      let overlapScore = 0;
+      for (const rect of cardRects) {
+        const area = overlapArea(bubbleRect, rect, rect.isCandidate ? 8 : 3);
+        if (!area) continue;
+        overlapScore += rect.isCandidate ? area * 10 : area;
+      }
+      const distanceScore = Math.abs(x - activeCenterX) * 1.2 + Math.abs(y - preferredTop) * 0.2;
+      const totalScore = overlapScore * 1000 + distanceScore;
+      if (!best || totalScore < best.score) {
+        best = { x, y, score: totalScore, overlapScore };
+      }
+      if (overlapScore === 0 && Math.abs(x - activeCenterX) <= 24) {
+        best = { x, y, score: totalScore, overlapScore: 0 };
+        break;
+      }
+    }
+    if (best && best.overlapScore === 0) break;
+  }
+
+  const finalX = best ? best.x : defaultCenterX;
+  const finalY = best ? best.y : preferredTop;
+  speechBubble.style.left = `${finalX}px`;
+  speechBubble.style.top = `${finalY}px`;
+
+  const bubbleLeft = finalX - bubbleWidth / 2;
+  const bubbleTop = finalY;
+  const bubbleCenterX = finalX;
+  const bubbleCenterY = bubbleTop + bubbleHeight / 2;
+  const dx = activeCenterX - bubbleCenterX;
+  const dy = activeCenterY - bubbleCenterY;
+
+  let tailDir = "top";
+  if (Math.abs(dx) > 72) {
+    tailDir = dx < 0 ? "left" : "right";
+  } else if (Math.abs(dy) >= Math.abs(dx)) {
+    tailDir = dy < 0 ? "top" : "bottom";
+  } else {
+    tailDir = dx < 0 ? "left" : "right";
+  }
+
+  if (tailDir === "top" || tailDir === "bottom") {
+    const tailLeftPx = Math.max(18, Math.min(bubbleWidth - 18, activeCenterX - bubbleLeft));
+    speechBubble.style.setProperty("--tail-left", `${tailLeftPx}px`);
+  } else {
+    const tailTopPx = Math.max(18, Math.min(bubbleHeight - 18, activeCenterY - bubbleTop));
+    speechBubble.style.setProperty("--tail-top", `${tailTopPx}px`);
+  }
+  speechBubble.dataset.tailDir = tailDir;
+}
+
+function showSceneSpeech(memberId, rawText) {
+  const text = String(rawText || "").replace(/^老师：?/, "").trim();
+  if (!text) return;
+  setActiveRole(memberId);
+  setCurrentQuestion(text);
+}
+
+function formatCountdown(seconds) {
+  const safe = Math.max(0, seconds);
+  const minutes = String(Math.floor(safe / 60)).padStart(2, "0");
+  const secs = String(safe % 60).padStart(2, "0");
+  return `${minutes}:${secs}`;
+}
+
+function renderCountdown() {
+  if (!countdownClock) return;
+  countdownClock.textContent = formatCountdown(countdownSeconds);
+  countdownClock.classList.toggle("is-warning", countdownSeconds > 0 && countdownSeconds <= 120);
+  countdownClock.classList.toggle("is-timeout", countdownSeconds <= 0);
+}
+
+function stopCountdown() {
+  if (!countdownTicker) return;
+  window.clearInterval(countdownTicker);
+  countdownTicker = null;
+}
+
+function resetCountdown() {
+  countdownSeconds = 15 * 60;
+  renderCountdown();
+}
+
+function startCountdown() {
+  stopCountdown();
+  resetCountdown();
+  countdownTicker = window.setInterval(() => {
+    if (!interviewState.started) return;
+    countdownSeconds = Math.max(0, countdownSeconds - 1);
+    renderCountdown();
+    if (countdownSeconds === 0) {
+      stopCountdown();
+      setStatus("倒计时结束，请尽快结束复试并提交。", true);
+    }
+  }, 1000);
 }
 
 function pickExaminer(mode) {
   if (mode === "intro") {
     return committeeMembers.find((m) => m.id === "chief") || committeeMembers[0];
   }
-  const member = committeeMembers[interviewState.examinerCursor % committeeMembers.length];
+  const nextId = examinerRotationIds[interviewState.examinerCursor % examinerRotationIds.length];
+  const member = committeeMembers.find((m) => m.id === nextId) || committeeMembers[0];
   interviewState.examinerCursor += 1;
   return member;
 }
@@ -584,9 +868,70 @@ function makeFallbackFixAndSwitchQuestion() {
   };
 }
 
+function getStudentAnswers() {
+  return interviewState.transcript
+    .filter((item) => item.role === "student")
+    .map((item) => String(item.content || "").trim())
+    .filter(Boolean);
+}
+
+function analyzeParticipation() {
+  const answers = getStudentAnswers();
+  const answerCount = answers.length;
+  const noAnswerCount = answers.filter((text) => isNoAnswerIntent(text)).length;
+  const meaningfulCount = answers.filter((text) => text.length >= 18 && !isNoAnswerIntent(text)).length;
+  return { answers, answerCount, noAnswerCount, meaningfulCount };
+}
+
+function makeLowParticipationReport() {
+  const { answerCount, noAnswerCount, meaningfulCount } = analyzeParticipation();
+  if (answerCount === 0) {
+    return [
+      "总体评价：考生未进行有效作答，无法展示基础知识与表达能力。",
+      "总评建议分（满分10分）：1/10",
+      "优势：",
+      "1) 已进入模拟流程。",
+      "2) 面试礼仪流程有初步了解。",
+      "3) 具备继续训练空间。",
+      "主要问题：",
+      "1) 未进行任何有效作答。",
+      "2) 无法评估史实掌握程度。",
+      "3) 无法评估论证与表达能力。",
+      "7天提升建议：",
+      "1) 每天完成至少5道基础题的口头作答。",
+      "2) 每题按“结论-史实-影响”三段式回答。",
+      "3) 每晚复盘并纠正1个高频知识盲点。",
+    ].join("\n");
+  }
+
+  if (noAnswerCount === answerCount || (meaningfulCount === 0 && answerCount <= 2)) {
+    return [
+      "总体评价：考生有效作答极少，面试表现未达到基本答题要求。",
+      "总评建议分（满分10分）：2/10",
+      "优势：",
+      "1) 能进入并完成部分流程。",
+      "2) 具有继续练习意愿。",
+      "3) 可在短期训练内快速改善。",
+      "主要问题：",
+      "1) 多次出现“不会/答不上来”。",
+      "2) 缺少可评分的史实论证内容。",
+      "3) 作答连续性不足。",
+      "7天提升建议：",
+      "1) 先打牢中国史与世界史基础框架。",
+      "2) 先背熟30个高频考点的标准答案框架。",
+      "3) 每天至少进行15分钟限时口述练习。",
+    ].join("\n");
+  }
+
+  return "";
+}
+
 function makeFallbackReport() {
-  const answerCount = interviewState.transcript.filter((i) => i.role === "student").length;
-  const score = Math.max(4, Math.min(9, 5 + Math.floor(answerCount / 2)));
+  const lowParticipation = makeLowParticipationReport();
+  if (lowParticipation) return lowParticipation;
+
+  const answerCount = getStudentAnswers().length;
+  const score = Math.max(3, Math.min(8, 4 + Math.floor(answerCount / 2)));
   const report = [
     "面试总结（降级模式）",
     `方向：${interviewState.track}`,
@@ -715,7 +1060,10 @@ async function generateReportByAPI() {
     {
       role: "system",
       content:
-        "你是历史学考研复试评委。请根据完整对话给出整场复试报告，内容客观、可执行。",
+        [
+          "你是历史学考研复试评委。请根据完整对话给出整场复试报告，内容客观、可执行。",
+          "若考生几乎未作答，或多次明确表示不会/答不上来，总评建议分必须为1-3分，不得高评。",
+        ].join(" "),
     },
     {
       role: "user",
@@ -795,90 +1143,17 @@ function downloadReportAsText(reportText) {
   URL.revokeObjectURL(link.href);
 }
 
-async function downloadReportAsPDF(reportText) {
-  const jsPDFCtor = window.jspdf?.jsPDF;
-  if (!jsPDFCtor) {
-    throw new Error("jsPDF库未加载");
-  }
-
-  const mount = document.createElement("div");
-  mount.style.position = "fixed";
-  mount.style.left = "-100000px";
-  mount.style.top = "0";
-  mount.style.width = "820px";
-  mount.style.zIndex = "-1";
-
-  const wrapper = document.createElement("div");
-  wrapper.style.padding = "28px 32px";
-  wrapper.style.fontFamily = "\"Noto Serif SC\", \"Source Han Serif SC\", \"Songti SC\", serif";
-  wrapper.style.fontSize = "14px";
-  wrapper.style.lineHeight = "1.8";
-  wrapper.style.color = "#1a1a1a";
-  wrapper.style.background = "#ffffff";
-  wrapper.style.width = "794px";
-  wrapper.style.boxSizing = "border-box";
-  wrapper.style.overflow = "visible";
-
-  const title = document.createElement("h1");
-  title.textContent = "历史学考研复试报告";
-  title.style.margin = "0 0 12px 0";
-  title.style.fontSize = "24px";
-
-  const meta = document.createElement("p");
-  meta.textContent = `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })} ｜ 方向：${interviewState.track}`;
-  meta.style.margin = "0 0 16px 0";
-  meta.style.color = "#6b7280";
-
-  const body = document.createElement("div");
-  body.style.margin = "0";
-  body.style.padding = "0";
-
-  reportText.split("\n").forEach((line) => {
-    const p = document.createElement("p");
-    p.style.margin = "0 0 10px 0";
-    p.style.wordBreak = "break-word";
-    p.textContent = line || " ";
-    body.appendChild(p);
+function scrollToInterviewPanel() {
+  if (!interviewPanel || interviewPanel.classList.contains("hidden")) return;
+  requestAnimationFrame(() => {
+    interviewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   });
-
-  wrapper.appendChild(title);
-  wrapper.appendChild(meta);
-  wrapper.appendChild(body);
-  mount.appendChild(wrapper);
-  document.body.appendChild(mount);
-
-  try {
-    const pdf = new jsPDFCtor({
-      orientation: "portrait",
-      unit: "mm",
-      format: "a4",
-      compress: true,
-    });
-
-    await pdf.html(wrapper, {
-      x: 10,
-      y: 10,
-      width: 190,
-      windowWidth: 794,
-      autoPaging: "text",
-      html2canvas: {
-        scale: 1.6,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-        windowWidth: 794,
-      },
-    });
-
-    pdf.save(makeReportFileName("pdf"));
-  } finally {
-    mount.remove();
-  }
 }
 
 async function startInterview() {
-  renderSceneSeats();
+  renderCommitteeGrid();
   interviewState.started = true;
-  interviewState.track = trackSelect.value;
+  interviewState.track = trackSelect?.value || "历史学";
   interviewState.round = 0;
   interviewState.history = [];
   interviewState.transcript = [];
@@ -888,18 +1163,21 @@ async function startInterview() {
   interviewState.phase = "intro";
   interviewState.specialization = "";
   interviewState.examinerCursor = 1;
-  interviewState.speakingId = "";
+  interviewState.activeRoleId = "chief";
 
   interviewPanel.classList.remove("hidden");
   chatBox.innerHTML = "";
   clearSpeaking();
-  speakerBubble.classList.add("hidden");
-  speakerBubble.textContent = "";
+  setCurrentQuestion("考官准备提问中...");
   startBtn.disabled = true;
   finishBtn.disabled = false;
   setDownloadDisabled(true);
   setInputDisabled(true);
-  setStatus("面试进行中（场景已就位，请先自我介绍）", false);
+  setStatus("面试进行中（倒计时已开始，请先自我介绍）", false);
+  if (historyAccordion) {
+    historyAccordion.open = false;
+  }
+  startCountdown();
   const chief = pickExaminer("intro");
   const introQuestion = "请介绍你自己。";
   showSceneSpeech(chief.id, introQuestion);
@@ -908,6 +1186,7 @@ async function startInterview() {
   interviewState.transcript.push({ role: "teacher", content: introQuestion });
   setInputDisabled(false);
   answerInput.focus();
+  scrollToInterviewPanel();
 }
 
 function resetInterview() {
@@ -924,20 +1203,22 @@ function resetInterview() {
   interviewState.phase = "intro";
   interviewState.specialization = "";
   interviewState.examinerCursor = 0;
-  interviewState.speakingId = "";
+  interviewState.activeRoleId = "chief";
   startBtn.disabled = false;
   finishBtn.disabled = false;
   setDownloadDisabled(true);
   interviewPanel.classList.add("hidden");
   chatBox.innerHTML = "";
   clearSpeaking();
-  if (speakerBubble) {
-    speakerBubble.classList.add("hidden");
-    speakerBubble.textContent = "";
-  }
+  setCurrentQuestion("请点击“开始复试”进入第一题。");
+  stopCountdown();
+  resetCountdown();
   answerInput.value = "";
   resizeAnswerInput();
   setInputDisabled(false);
+  if (historyAccordion) {
+    historyAccordion.open = false;
+  }
   setStatus("未开始", false);
   syncVoiceHint();
 }
@@ -955,7 +1236,6 @@ async function onAnswerSubmit(event) {
   const answer = answerInput.value.trim();
   if (!answer) return;
 
-  showSceneSpeech("student", answer);
   appendMessage("student", `考生：${answer}`);
   interviewState.transcript.push({ role: "student", content: answer });
   answerInput.value = "";
@@ -1022,9 +1302,20 @@ async function finishInterview() {
 
   setInputDisabled(true);
   finishBtn.disabled = true;
+  stopCountdown();
   setStatus("正在生成整场复试报告...", false);
 
   try {
+    const lowParticipation = makeLowParticipationReport();
+    if (lowParticipation) {
+      appendMessage("score", `整场复试报告\n${lowParticipation}`);
+      interviewState.reportGenerated = true;
+      interviewState.finalReportText = lowParticipation;
+      setDownloadDisabled(false);
+      setStatus("复试已结束（作答不足，低分处理）", true);
+      return;
+    }
+
     const report = await generateReportByAPI();
     appendMessage("score", `整场复试报告\n${report}`);
     interviewState.reportGenerated = true;
@@ -1050,18 +1341,13 @@ async function downloadReport() {
     return;
   }
 
-  setStatus("正在下载PDF报告...", false);
-  try {
-    await downloadReportAsPDF(interviewState.finalReportText);
-    setStatus("PDF报告下载完成", false);
-  } catch (error) {
-    downloadReportAsText(interviewState.finalReportText);
-    setStatus(`PDF下载失败，已降级为TXT：${error.message}`, true);
-  }
+  setStatus("正在下载TXT报告...", false);
+  downloadReportAsText(interviewState.finalReportText);
+  setStatus("TXT报告下载完成", false);
 }
 
 saveConfigBtn.addEventListener("click", saveConfig);
-startBtn.addEventListener("click", startInterview);
+startBtn.addEventListener("click", onStartButtonClick);
 resetBtn.addEventListener("click", resetInterview);
 finishBtn.addEventListener("click", finishInterview);
 downloadReportBtn.addEventListener("click", downloadReport);
@@ -1069,11 +1355,27 @@ voiceBtn.addEventListener("click", toggleVoiceInput);
 answerForm.addEventListener("submit", onAnswerSubmit);
 answerInput.addEventListener("input", resizeAnswerInput);
 answerInput.addEventListener("keydown", onAnswerInputKeydown);
+if (noticeCancelBtn) {
+  noticeCancelBtn.addEventListener("click", onNoticeCancel);
+}
+if (noticeAgreeBtn) {
+  noticeAgreeBtn.addEventListener("click", onNoticeAgree);
+}
+if (examNoticeModal) {
+  examNoticeModal.addEventListener("click", onNoticeOverlayClick);
+}
+document.addEventListener("keydown", onDocumentEscape);
 
 loadConfig();
 setVoiceButtonLabel();
 setStatus("未开始", false);
 resizeAnswerInput();
+renderCommitteeGrid();
+resetCountdown();
+setCurrentQuestion("请点击“开始复试”进入第一题。");
 syncVoiceHint();
 apiKeyInput.addEventListener("input", syncVoiceHint);
 baseUrlInput.addEventListener("input", syncVoiceHint);
+window.addEventListener("resize", () => {
+  positionSpeechBubble(interviewState.activeRoleId);
+});
